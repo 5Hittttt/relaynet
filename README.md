@@ -1,3 +1,5 @@
+软件是需要通过服务器中继来联机，不是P2P哦
+
 # RelayNet
 
 RelayNet 使用自己的 UDP 中继协议，不依赖 SoftEther。服务端可运行在 Windows 或 Linux；图形客户端目前只面向 Windows。房间由房主使用自定义房间号和密码创建，其他成员输入相同资料加入。
