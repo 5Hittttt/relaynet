@@ -1,104 +1,99 @@
-# LAN Room
+# RelayNet
 
-Windows-only desktop client with Windows and Linux server targets. The server can provision isolated virtual LAN rooms through SoftEther VPN Server. Voice and screen media still require a separate media service.
+RelayNet 使用自己的 UDP 中继协议，不依赖 SoftEther。服务端可运行在 Windows 或 Linux；图形客户端目前只面向 Windows。房间由房主使用自定义房间号和密码创建，其他成员输入相同资料加入。
 
-## Current status
+## 当前实现
 
-- Cross-platform Go server executable.
-- Windows WPF desktop client.
-- Set a room ID and password when creating a room, or leave either field empty to generate it automatically. Room IDs are unique regardless of letter case.
-- Join a room with its ID and password.
-- Real-time room presence and text chat over WebSocket.
-- Room and member state is saved to `lanroom-state.json`; recent chat messages remain in memory and clear when the server exits.
-- With SoftEther enabled, each room gets a Virtual Hub, an isolated DHCP subnet, and a separate VPN account for each member. The room create/join response contains that member's VPN connection details.
+- 房间成员、文字聊天、延迟显示和房主踢人。
+- 指定端口的 UDP 转发，以及把本地 TCP 连接封装进 UDP 中继的实验性转发。
+- 麦克风语音、Windows 扬声器/电脑播放声音共享，以及屏幕共享。语音使用分声道 IMA ADPCM 编码和短抖动缓冲；电脑声音通过 Windows WASAPI 回环采集，房间成员无需开启麦克风即可收听。屏幕共享支持 1080p、1440p、2160p 和最高 120 FPS；可选自动、20、50、85 Mbps 编码目标码率，单个发送端的视频发送速率上限为 100 Mbps（为 UDP/IP 开销预留余量）。实际画质与帧率取决于采集、编码、网络和接收端性能，尚未做跨机器性能验证。
+- Windows 客户端提供屏幕观看和本地预览，不提供远程控制。
+- 屏幕观看页可独立选择原画、720p、1080p、1440p、2160p，以及跟随共享端、30/60/120 FPS。低档位实际使用更低分辨率/帧率和码率的视频流，降低接收带宽；上限受共享端配置约束。
 
-The full requirements baseline is in [PROJECT_SPEC.md](PROJECT_SPEC.md). Server setup for both platforms is in [server/DEPLOY.md](server/DEPLOY.md).
+## 客户端界面
 
-## Run the server
+客户端采用 Discord 风格的深色扁平布局，左侧为房间导航和连接状态，聊天页右侧显示成员列表。
 
-Requires Go 1.24 or newer.
+- **房间设置**：配置服务器、昵称、房间 ID、密码、协议和游戏端口，再点击左下角的“连接房间”。
+- **房间聊天**：发送文字消息，右键成员调节音量；房主还可踢出成员。
+- **语音与共享**：设置麦克风、播放设备、电脑声音和屏幕共享参数。
+- **屏幕直播**：选择正在共享的成员，调整播放画质、帧率和帧率统计。
+- **运行日志**：查看连接与媒体日志。
+
+### 投票与房主权限移交
+
+在成员列表右键其他成员，选择“发起踢人投票”；右键当前房主则可“投票接任房主”。针对房主只移交管理权限，原房主继续留在房间。普通成员被投票踢出后，同样由投票发起人接任房主。
+
+- 投票限时 **60 秒**，发起人自动赞成。被投票人不参与、不计入总人数；其余发起时在线成员须 **严格超过半数** 赞成，达到多数后立即进入否决期。
+- 房主会收到提示窗，有 **30 秒** 点击“否决本轮投票”。关闭提示窗、点击“暂不处理”或未操作均不算否决；期限结束后服务器执行。
+- 所有页面顶部显示本轮票数、倒计时及赞成/反对按钮。每人只能提交一次最终票；每个房间同时进行一轮投票。
+- 后来加入者不参与本轮，其他成员离开不改变本轮门槛和已投票。发起人或目标离开会取消本轮，房主实际退出时仍按原有规则自动接任。
+- 移交的是房间管理权限，原电脑仍提供正在运行的游戏服务；不会把游戏进程迁移到新房主电脑。原有房主直接踢人的功能保留。
+
+请同时更新 **中继服务端及房间内客户端**。旧服务端不支持投票，旧客户端也无法显示否决提示。控制请求会重试并由服务端确认，倒计时与权限判定以服务端为准。
+
+## 与完整虚拟局域网的区别
+
+目前客户端监听的是 `127.0.0.1` 上手动指定的游戏端口。它没有虚拟网卡，也不转发任意以太网帧、ARP 或局域网广播。因此需要在游戏中手动填写地址或加入端口转发；依赖 LAN 自动发现的游戏尚不能直接使用。界面的“TCP”表示本地 TCP 端口转发，**客户端到服务器仍是 UDP**，现有协议也没有为这条 TCP 数据实现重传和按序交付。
+
+电脑声音共享捕获当前 Windows 默认播放设备混合输出。音频编码格式已更新，房间内需要同时升级客户端。UDP 中继和视频在高丢包或 2160p/120 FPS 下的稳定性仍需改进。房间认证目前发送可重放的 SHA-256 密码令牌；在对公网开放前需要改为挑战响应认证并补充限流。
+
+## 启动服务端
+
+Windows：
 
 ```powershell
-cd server
-$env:LANROOM_CHAT_ONLY = "1" # local room/chat development only
-go run ./cmd/lanroom-server
+go build -o bin/relayserver.exe ./cmd/relayserver
+.\bin\relayserver.exe -listen :19132
 ```
 
-The server requires SoftEther configuration for virtual networking. `LANROOM_CHAT_ONLY=1` explicitly starts a room/chat development server without VPN. The server listens on `:8080` by default. Set `LANROOM_ADDR` to change the listen address, for example `127.0.0.1:8080` for local development. `LANROOM_STATE_FILE` changes the state file path. The state file contains member tokens and salted password hashes; keep it private and back it up.
-
-Build for the current platform:
+Linux x64 可在 Linux 主机上构建，或从 Windows 交叉编译：
 
 ```powershell
-cd server
-go build -o lanroom-server.exe ./cmd/lanroom-server
-```
-
-Build a Linux x64 server binary from Windows:
-
-```powershell
-cd server
+$env:CGO_ENABLED = "0"
 $env:GOOS = "linux"
 $env:GOARCH = "amd64"
-go build -o lanroom-server ./cmd/lanroom-server
+go build -o bin/relayserver-linux-amd64 ./cmd/relayserver
 Remove-Item Env:GOOS
 Remove-Item Env:GOARCH
+Remove-Item Env:CGO_ENABLED
 ```
 
-## Run the Windows desktop client
+服务器需开放所选 **UDP** 端口，默认 `19132`。`server-linux/relaynet.service` 是 systemd 示例，部署时需确认 `ExecStart` 指向实际二进制路径。
 
-Requires the .NET 9 SDK and Windows Desktop Runtime.
+## 构建 Windows 客户端
 
-```powershell
-dotnet run --project client/LanRoom.Client/LanRoom.Client.csproj
-```
+客户端使用 CGO、Fyne、Windows 图形采集和 Media Foundation，需要 Go 1.24+ 与可用的 MinGW GCC。运行 `./build.ps1`，产物在 `bin/`。已有安装脚本 `installer.iss`，打包前需重新构建并核对其输入文件与版本。
 
-The client currently supports room creation with a custom ID/password, password-based joining, member presence, and text chat. Enter the server's reachable HTTP address in the connection screen. When the server provisions a VPN account, the room view can copy its connection details for manual use with SoftEther VPN Client. Automatic VPN connection, voice, and screen sharing are not implemented yet.
+构建脚本会在 `.build/` 生成 Fyne 2.8.1 的本地副本，将其固定 60 Hz 绘制循环调整为 120 Hz，并通过独立的模块文件只应用于本项目客户端；原始模块缓存保持不变。直接运行未使用此模块文件的 `go build` 会使用上游的 60 Hz 绘制循环。实际帧率仍取决于采集、编码、解码与显示性能，不能仅凭帧率设置判断已达到 120 FPS。
 
-## API: create a room
+屏幕编码优先使用已正确解锁并处理异步事件的 GPU 编码器，不可用时回退 CPU。暂停本地预览时保留 H.264 参考帧但跳过显示像素转换；观看窗口按自身物理像素尺寸转换画面，放大后自动恢复所需细节，网络传输仍使用所选分辨率。
 
-`POST /api/rooms`
+高帧率采集与编码分别运行，待编码队列只保留最新原始画面；已经编码的参考帧完整发送，输出保留各帧原始采集时间戳。支持 `MinUpdateInterval` 的 Windows 会话按所选帧率配置采集间隔，避免默认 16 ms 间隔限制 120 FPS；旧系统继续使用兼容路径。原生像素转换启用编译器向量化，直接写入编码样本；1080p 桌面放大至 2160p 时复用相同像素的颜色计算。
 
-```json
-{
-  "name": "Friday game",
-  "room_id": "friday-game",
-  "password": "a-private-password",
-  "display_name": "Alice"
-}
-```
+手动功能检查清单见 [tests/manual_test_cases.md](tests/manual_test_cases.md)。
 
-`room_id` and `password` are optional; the server generates either one when omitted or empty. IDs use 4–32 ASCII letters, digits, hyphens, or underscores. Passwords use 6–128 Unicode characters without control characters. An existing ID returns HTTP 409. The response includes `room_id`, `room_name`, `password` (shown only when created), `member_token`, `member`, and `websocket_path`. When SoftEther is enabled it also includes `vpn` with `server`, `port`, `hub`, `username`, `password`, and `subnet`. Share the room ID and room password with the people joining. Keep the member token and VPN password private.
 
-## API: join a room
+### 屏幕共享的电脑声音
 
-`POST /api/rooms/{room_id}/join`
+“语音与共享”页的屏幕共享区域提供“同时共享电脑声音”开关（默认开启）和低、中、高三档音质；开启屏幕后会一起采集声音，停止屏幕时一起停止。接收端选择某个屏幕共享成员时只播放该成员的屏幕声音，本地预览静音。独立语音聊天仍使用原有音频通道。
 
-```json
-{
-  "password": "a-private-password",
-  "display_name": "Bob"
-}
-```
+| 档位 | 格式 | 音频有效码率 |
+| --- | --- | --- |
+| 低 | 16 kHz、单声道、PCM16 | 256 kbps |
+| 中 | 32 kHz、立体声、PCM16 | 1024 kbps |
+| 高 | 48 kHz、立体声、PCM16 | 1536 kbps |
 
-The response includes that member's private `member_token` and the WebSocket path; it does not repeat the room password. Existing rooms created by the older invite-code API accept their invite code as the password.
+音视频使用同一单调采集时钟、会话 ID 和时间戳。接收端等待音频缓冲和首个可解码画面，以音频输出样本位置驱动画面；5 ms 音频包独立解码，丢包补静音保留时间轴，视频乱序短暂等待，参考帧丢失后重建解码器并等关键帧。初始音频缓冲为 120 ms，输出设备请求 10 ms 周期、2 个周期；硬件输出延迟按 20 ms 估算，设备实际延迟和显示绘制延迟仍会影响最终物理音画偏差。同步单元测试与本机中继传输测试不等于跨机器声画延迟实测。
 
-## WebSocket: presence and chat
+所有参与屏幕音频共享的 Windows 客户端都需要升级。旧共享端仍可向新客户端发送原有视频，新接收端会回退为原画观看并提示共享端升级；旧客户端无法解码新客户端的带时间戳屏幕流。
 
-Connect to `GET /api/rooms/{room_id}/ws` with `Authorization: Bearer <member_token>`.
+### 播放端画质与帧率
 
-On connection, the server sends `room.snapshot` with currently online members and recent messages. It then sends `member.joined`, `member.left`, and `chat.message` events as room state changes.
+在“屏幕直播”页选择成员后，用“播放画质”和“播放帧率”调整自己的观看档位，可在播放中切换，选择会保留到下次启动。共享端配置的是最高输出规格：例如共享端开启 1080p/60 FPS，观看者选择 2160p/120 FPS 时实际仍为 1080p/60 FPS。
 
-Send chat as a text frame:
+此功能需要更新共享端、观看端和中继服务端。中继停止给订阅者广播原画，只转发所选档位；使用旧服务端时仍可能额外接收原画，不能保证降低带宽的目标。WGC 共用一次捕获，为正在观看的不同档位创建独立编码器；同档位复用编码，无人观看的附加编码器会回收。DXGI 回退路径使用独立捕获器。所有输出共用原来的 100 Mbps 发送预算，多人观看或多档同时编码会占用额外 GPU 和上传资源。
 
-```json
-{
-  "type": "chat.send",
-  "text": "Hello"
-}
-```
+切档保留屏幕音频的会话与时钟，只重建视频解码和排序，等待所选档位的关键帧。旧订阅的视频会被拒绝，避免把旧规格的参考帧混入新规格；切档期间可能短暂等待画面。低档视频不降低独立音频的音质档位，音频带宽保持不变。实际音画物理偏差仍需在目标机器的声卡和显示器上测量。
 
-The server retains the last 100 messages in memory per room. Chat text is limited to 2,000 Unicode characters.
-
-## Development boundary
-
-This is still a development foundation, not a public deployment package. The Windows client does not yet connect its virtual adapter automatically; it currently handles room and text chat only. Voice, screen share, computer audio, account management, room moderation, and media forwarding are pending. Provisioning has not been verified against a live SoftEther installation here. The API has no room creation authorization or rate limit yet, so keep it on a trusted network during development. Use HTTPS/WSS through a properly configured reverse proxy before public exposure.
+本机双观看者的带宽和切档检查见 [tests/playback_results_2026-10-02.md](tests/playback_results_2026-10-02.md)。

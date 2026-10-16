@@ -1,0 +1,26 @@
+# RelayNet Server systemd 服务文件
+# 安装方法:
+#   1. 复制到 systemd 目录: sudo cp relaynet.service /etc/systemd/system/
+#   2. 编辑路径: sudo nano /etc/systemd/system/relaynet.service
+#      将 ExecStart 中的路径改为实际路径
+#   3. 重载并启动:
+#      sudo systemctl daemon-reload
+#      sudo systemctl enable relaynet      # 开机自启
+#      sudo systemctl start relaynet       # 立即启动
+#      sudo systemctl status relaynet      # 查看状态
+#      sudo journalctl -u relaynet -f       # 查看日志
+
+[Unit]
+Description=RelayNet Server
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/opt/relaynet/relayserver -listen :19132
+WorkingDirectory=/opt/relaynet
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

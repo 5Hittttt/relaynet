@@ -1,12 +1,6 @@
-/server/lanroom-server
-/server/lanroom-server.exe
-/server/coverage.out
-/server/dist/
-/server/.gocache/
-**/lanroom-state.json
-**/.lanroom-*.tmp
-/client/**/bin/
-/client/**/obj/
+.build/
+/bin/
+/dist/
+/*.exe
+/server-linux/relayserver
 *.log
-.DS_Store
-Thumbs.db
